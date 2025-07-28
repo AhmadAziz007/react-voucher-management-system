@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import api from '../../services/api';
 
@@ -6,19 +6,27 @@ export default function Vouchers () {
   const [vouchers, setVouchers] = useState([]);
   const [meta, setMeta] = useState({ last_page: 0, page: 1, total: 0 });
   const [searchCode, setSearchCode] = useState('');
+  const [debouncedSearchCode, setDebouncedSearchCode] = useState('');
 
   const navigate = useNavigate();
   const location = useLocation();
+  const mounted = useRef(false);
 
-  const perPage = 5;
+  const queryParams = new URLSearchParams(location.search);
+  const initialSearchCode = queryParams.get('voucher_code') || '';
+  const currentPage = parseInt(queryParams.get('page')) || 1;
 
-  const fetchVouchers = async (page = 1, code = '') => {
+  const perPage = meta.total && meta.last_page
+    ? Math.ceil(meta.total / meta.last_page)
+    : 5;
+
+  const fetchVouchers = useCallback(async (page = 1, code = '') => {
     try {
-      const { data } = await api.get('/vouchers', {
-        params: {
-          page,
-          voucher_code: code
-        }
+      const { data } = await api({
+        method: 'post',
+        url: 'vouchers/search',
+        params: { page },
+        data: { voucher_code: code }
       });
 
       setVouchers(data.Data);
@@ -32,7 +40,7 @@ export default function Vouchers () {
     } catch (error) {
       console.error('Error fetching vouchers:', error);
     }
-  };
+  }, [navigate]);
 
   const getRowNumber = (index) => {
     return (meta.page - 1) * perPage + index + 1;
@@ -40,38 +48,40 @@ export default function Vouchers () {
 
   const changePage = (page) => {
     if (page < 1 || page > meta.last_page) return;
-    fetchVouchers(page, searchCode);
+    fetchVouchers(page, debouncedSearchCode);
   };
 
   const deleteVoucher = async (id) => {
     if (!confirm('Are you sure you want to delete this voucher?')) return;
 
     try {
-      await api.delete(`/vouchers/${id}`);
+      await api.delete(`vouchers/${id}`);
+      fetchVouchers(currentPage, debouncedSearchCode);
       alert('Voucher deleted successfully');
-
-      // Perbaikan: Ambil ulang data setelah penghapusan
-      fetchVouchers(meta.page, searchCode);
-
     } catch (error) {
       console.error('Error deleting voucher:', error);
       alert('Failed to delete voucher. Please try again.');
     }
   };
 
-  const handleSearch = (e) => {
-    e.preventDefault();
-    fetchVouchers(1, searchCode);
-  };
-
+  // Debounce searchCode ke debouncedSearchCode
   useEffect(() => {
-    const queryParams = new URLSearchParams(location.search);
-    const page = parseInt(queryParams.get('page')) || 1;
-    const code = queryParams.get('voucher_code') || '';
+    const timerId = setTimeout(() => {
+      setDebouncedSearchCode(searchCode);
+    }, 500);
 
-    setSearchCode(code);
-    fetchVouchers(page, code);
-  }, [location.search]);
+    return () => clearTimeout(timerId);
+  }, [searchCode]);
+
+  // Fetch saat debouncedSearchCode atau currentPage berubah
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      setSearchCode(initialSearchCode);
+      setDebouncedSearchCode(initialSearchCode);
+    }
+    fetchVouchers(currentPage, debouncedSearchCode);
+  }, [debouncedSearchCode, currentPage, fetchVouchers]);
 
   return (
     <>
@@ -81,7 +91,7 @@ export default function Vouchers () {
         <Link to="/vouchers/create" className="btn btn-sm btn-outline-secondary">
           Add
         </Link>
-        <form className="d-flex" onSubmit={handleSearch}>
+        <div className="d-flex">
           <input
             type="text"
             placeholder="Search by code"
@@ -89,10 +99,7 @@ export default function Vouchers () {
             value={searchCode}
             onChange={(e) => setSearchCode(e.target.value)}
           />
-          <button type="submit" className="btn btn-sm btn-outline-primary">
-            Search
-          </button>
-        </form>
+        </div>
       </div>
 
       <div className="table-responsive small">
@@ -134,6 +141,7 @@ export default function Vouchers () {
           </tbody>
         </table>
 
+        {/* Tampilkan pagination jika lebih dari 1 halaman */}
         {meta.last_page > 1 && (
           <nav>
             <ul className="pagination">
@@ -171,7 +179,6 @@ export default function Vouchers () {
             </ul>
           </nav>
         )}
-
       </div>
     </>
   );
